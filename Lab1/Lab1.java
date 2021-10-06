@@ -2,6 +2,9 @@ import java.io.FileOutputStream;
 import java.io.PrintStream;
 import java.util.List;
 import java.util.SortedSet;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.TreeSet;
 import java.io.File;
 import java.io.FileNotFoundException;
 
@@ -43,7 +46,19 @@ class DepartureEvent extends Event {
 
 class EventComparator implements Comparator<Event> {
     public int compare(Event e1, Event e2){
-        return e1.time - e2.time;
+        if (e1.time < e2.time){
+            return -1;
+        }
+        return 1;
+    }
+}
+
+class ResultSet {
+    double avgPackets;
+    double pIdle;
+    ResultSet(double avgPackets, double pIdle){
+        this.avgPackets = avgPackets;
+        this.pIdle = pIdle;
     }
 }
 
@@ -78,7 +93,7 @@ public class Lab1 {
 
     // Queston 2
 
-    static void runSim(double totalTime, double arrivalRate, double lengthRate, double transmissionSpeed, double observerRate){
+    static ResultSet runSim(double totalTime, double arrivalRate, double lengthRate, double transmissionSpeed, double observerRate){
         SortedSet<Event> allEvents = new TreeSet<>(new EventComparator());
         List<ArrivalEvent> arrivals = new ArrayList<>();
         List<DepartureEvent> departures = new ArrayList<>();
@@ -106,7 +121,7 @@ public class Lab1 {
         double observerTime = exponentialRandom(observerRate);
         while(observerTime < totalTime){
             ObserverEvent observerEvent = new ObserverEvent(observerTime);
-            arrivals.add(observerEvent);
+            observers.add(observerEvent);
             allEvents.add(observerEvent);
             observerTime += exponentialRandom(observerRate);
         }
@@ -116,9 +131,30 @@ public class Lab1 {
         for (Event event : allEvents){
             event.doEvent(queueSize, observedPacketsInBuffer, observedIdle);
         }
+        double totalPackets = 0;
+        double totalIdle = 0;
+        for (int i = 0; i < observedPacketsInBuffer.size(); i++){
+            totalPackets += (double)observedPacketsInBuffer.get(i);
+        }
+        for (int i = 0; i < observedIdle.size(); i++){
+            totalIdle += observedIdle.get(i) ? 1D : 0D;
+        }
+        return new ResultSet(totalPackets / (double)observedPacketsInBuffer.size(), totalIdle / (double)observedIdle.size());
+    }
+
+    static final double LENGTH = 2000D;
+    static final double SPEED = 1000000D;
+    static final double OBSERVER_RATE = 3000D;
+
+    static void runQ2Experiment(double totalTime){
+        for (double rho = 0.25; rho <= 0.95; rho += 0.1){
+            ResultSet results = runSim(totalTime, rho * SPEED / LENGTH, 1D / LENGTH, SPEED, OBSERVER_RATE);
+            System.out.printf("Results for rho = %.2f: avg packets %.2f, idle %.4f\n", rho, results.avgPackets, results.pIdle);
+        }
     }
 
     public static void main(String[] args) throws FileNotFoundException{
         q1();
+        runQ2Experiment(2000D);
     }
 }
