@@ -13,7 +13,10 @@ abstract class Event {
     Event(double time){
         this.time = time;
     }
+    //process event with unlimited buffer size
     abstract void doEvent(int[] queueSize, List<Integer> observedPacketsInBuffer, List<Boolean> observedIdle);
+    //process event with buffer size K
+    abstract void doEventK(SortedSet<Event> allEvents, int[] queueSize, List<Integer> observedPacketsInBuffer, int[] lostPackets, double[] lastDepartureTime, int K);
 }
 
 class ObserverEvent extends Event {
@@ -24,14 +27,46 @@ class ObserverEvent extends Event {
         observedPacketsInBuffer.add(queueSize[0]);
         observedIdle.add(queueSize[0] == 0);
     }
+
+    void doEventK(SortedSet<Event> allEvents, int[] queueSize, List<Integer> observedPacketsInBuffer, int[] lostPackets, double[] lastDepartureTime, int K) {
+        observedPacketsInBuffer.add(queueSize[0]);
+    }
 }
 
 class ArrivalEvent extends Event {
+    double lengthRate;
+    double transmissionSpeed;
+    double totalTime;
+
     ArrivalEvent(double time){
         super(time);
     }
+
+    //Overloaded constructor to store values necessary to create Departure Events 
+    ArrivalEvent(double time, double lr, double ts, double tt){
+        super(time);
+        lengthRate = lr;
+        transmissionSpeed = ts;
+        totalTime = tt;
+    }
+
     void doEvent(int[] queueSize, List<Integer> observedPacketsInBuffer, List<Boolean> observedIdle){
         queueSize[0]++;
+    }
+
+    void doEventK(SortedSet<Event> allEvents, int[] queueSize, List<Integer> observedPacketsInBuffer, int[] lostPackets, double[] lastDepartureTime, int K) {
+        if(queueSize[0] < K) { 
+            queueSize[0]++;
+            //generate packet's departure event
+            lastDepartureTime[0] = Math.max(lastDepartureTime[0], time) + Lab1.exponentialRandom(lengthRate)/transmissionSpeed;
+            if (lastDepartureTime[0] < totalTime){
+                DepartureEvent departureEvent = new DepartureEvent(lastDepartureTime[0]);
+                allEvents.add(departureEvent);
+            }
+        } else { //packet must be dropped
+            lostPackets[0]++;
+        }
+
     }
 }
 
@@ -40,6 +75,9 @@ class DepartureEvent extends Event {
         super(time);
     }
     void doEvent(int[] queueSize, List<Integer> observedPacketsInBuffer, List<Boolean> observedIdle){
+        queueSize[0]--;
+    }
+    void doEventK(SortedSet<Event> allEvents, int[] queueSize, List<Integer> observedPacketsInBuffer, int[] lostPackets, double[] lastDepartureTime, int K) {
         queueSize[0]--;
     }
 }
@@ -56,9 +94,14 @@ class EventComparator implements Comparator<Event> {
 class ResultSet {
     double avgPackets;
     double pIdle;
+    double pLoss;
     ResultSet(double avgPackets, double pIdle){
         this.avgPackets = avgPackets;
         this.pIdle = pIdle;
+    }
+    ResultSet(double avgPackets, double pLoss, double pIdle){
+        this.avgPackets = avgPackets;
+        this.pLoss = pLoss;
     }
 }
 
@@ -142,6 +185,51 @@ public class Lab1 {
         return new ResultSet(totalPackets / (double)observedPacketsInBuffer.size(), totalIdle / (double)observedIdle.size());
     }
 
+    // Question 5 + 6
+
+    static ResultSet runSimK(double totalTime, double arrivalRate, double lengthRate, double transmissionSpeed, double observerRate, int K){
+        //data structure that stores all event types and sorts them based on time 
+        //sorting occurs whenever an event is added
+        TreeSet<Event> allEvents = new TreeSet<Event>(new EventComparator());
+        int numArrivalEvents = 0;
+
+        //generate arrival events
+        double arrivalTime = exponentialRandom(arrivalRate);
+        while(arrivalTime < totalTime){
+            ArrivalEvent arrivalEvent = new ArrivalEvent(arrivalTime, lengthRate, transmissionSpeed, totalTime);
+            allEvents.add(arrivalEvent);
+            numArrivalEvents++;
+            arrivalTime += exponentialRandom(arrivalRate);
+        }
+
+        //generate observer events
+        double observerTime = exponentialRandom(observerRate);
+        while(observerTime < totalTime){
+            ObserverEvent observerEvent = new ObserverEvent(observerTime);
+            allEvents.add(observerEvent);
+            observerTime += exponentialRandom(observerRate);
+        }
+
+        int[] queueSize = new int[1];
+        int[] lostPackets = new int[1];
+        double[] lastDepartureTime = new double[1];
+        List<Integer> observedPacketsInBuffer = new ArrayList<>();
+
+        //run all arrival, departure, and observer events
+        //while loop is used since allEvents is modified during the loop (adding departure events)
+        while(!allEvents.isEmpty()) {
+            Event event = allEvents.pollFirst();
+            event.doEventK(allEvents, queueSize, observedPacketsInBuffer, lostPackets, lastDepartureTime, K);
+        }
+
+        //calculate E[n] - average number of packets in buffer
+        double totalPackets = 0;
+        for (int i = 0; i < observedPacketsInBuffer.size(); i++){
+            totalPackets += (double)observedPacketsInBuffer.get(i);
+        }
+        return new ResultSet(totalPackets/(double)observedPacketsInBuffer.size(), lostPackets[0]/(double)numArrivalEvents, 0);
+    }
+
     static final double LENGTH = 2000D;
     static final double SPEED = 1000000D;
     static final double OBSERVER_RATE = 3000D;
@@ -153,8 +241,29 @@ public class Lab1 {
         }
     }
 
+    //run simulator for M/M/1/K queue for each value of K (10, 25, 50)
+    static void runQ6Experiment(double totalTime) {
+        System.out.println("\nK = 10");
+        for(double rho = 0.5; rho <= 1.51; rho += 0.1) {
+            ResultSet results = runSimK(totalTime, rho*SPEED/LENGTH, 1D / LENGTH, SPEED, 5*rho*SPEED/LENGTH, 10);
+            System.out.printf("Results for rho = %.2f: avg packets %.2f, packet loss probability %.4f\n", rho, results.avgPackets, results.pLoss);
+        }
+        System.out.println("\nK = 25");
+        for(double rho = 0.5; rho <= 1.51; rho += 0.1) {
+            ResultSet results = runSimK(totalTime, rho*SPEED/LENGTH, 1D / LENGTH, SPEED, 5*rho*SPEED/LENGTH, 25);
+            System.out.printf("Results for rho = %.2f: avg packets %.2f, packet loss probability %.4f\n", rho, results.avgPackets, results.pLoss);
+        }
+        System.out.println("\nK = 50");
+        for(double rho = 0.5; rho <= 1.51; rho += 0.1) {
+            ResultSet results = runSimK(totalTime, rho*SPEED/LENGTH, 1D / LENGTH, SPEED, 5*rho*SPEED/LENGTH, 50);
+            System.out.printf("Results for rho = %.2f: avg packets %.2f, packet loss probability %.4f\n", rho, results.avgPackets, results.pLoss);
+        }
+    }
+
+
     public static void main(String[] args) throws FileNotFoundException{
         q1();
         runQ2Experiment(2000D);
+        runQ6Experiment(2000D);
     }
 }
