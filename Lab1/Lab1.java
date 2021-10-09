@@ -230,40 +230,95 @@ public class Lab1 {
         return new ResultSet(totalPackets/(double)observedPacketsInBuffer.size(), lostPackets[0]/(double)numArrivalEvents, 0);
     }
 
+    static void stabilizeT(double rho){
+        int multiplier = 1;
+        ResultSet prevResults = null;
+        while (true){
+            System.out.println(multiplier);
+            ResultSet results = runSim(1000 * multiplier, rho * SPEED / LENGTH, 1D / LENGTH, SPEED, 5D * rho * SPEED/LENGTH);
+            if (prevResults != null){
+                double dPackets = Math.abs((results.avgPackets - prevResults.avgPackets) / prevResults.avgPackets);
+                double dPIdle = prevResults.pIdle == 0 ? 0 : Math.abs((results.pIdle - prevResults.pIdle) / prevResults.pIdle);
+                if (prevResults != null && dPackets < 0.05 && dPIdle < 0.05){
+                    break;
+                }
+            }
+            multiplier++;
+            prevResults = results;
+        }
+        System.out.println("Results for rho=" + rho + " stabilize at T=" + 1000 * (multiplier - 1));
+    }
+
+    static void stabilizeTK(double rho, int bufferSize){
+        int multiplier = 1;
+        ResultSet prevResults = null;
+        while (true){
+            ResultSet results = runSimK(1000 * multiplier, rho * SPEED / LENGTH, 1D / LENGTH, SPEED, 5D * rho * SPEED/LENGTH, bufferSize);
+            if (prevResults != null){
+                double dPackets = prevResults.avgPackets == 0 && results.avgPackets < 0.01 ? 0 : Math.abs((results.avgPackets - prevResults.avgPackets) / prevResults.avgPackets);
+                double dPIdle = prevResults.pIdle == 0 && results.pIdle < 0.01 ? 0 : Math.abs((results.pIdle - prevResults.pIdle) / prevResults.pIdle);
+                double dPLoss = prevResults.pLoss == 0 && results.pLoss < 0.01 ? 0 : Math.abs((results.pLoss - prevResults.pLoss) / prevResults.pLoss);
+                if (prevResults != null && dPackets < 0.05 && dPIdle < 0.05 && dPLoss < 0.05){
+                    break;
+                }
+            }
+            multiplier++;
+            prevResults = results;
+        }
+        System.out.println("Results for rho=" + rho + ", buffersize=" + bufferSize + " stabilize at T=" + 1000 * (multiplier - 1));
+    }
+
     static final double LENGTH = 2000D;
     static final double SPEED = 1000000D;
-    static final double OBSERVER_RATE = 3000D;
 
-    static void runQ2Experiment(double totalTime){
+    static void runQ2Experiment(double totalTime) throws FileNotFoundException{
+        System.out.println("Q2 results with infinite buffer:");
+        PrintStream output = new PrintStream(new FileOutputStream(new File("q2results.csv")));
         for (double rho = 0.25; rho <= 0.95; rho += 0.1){
-            ResultSet results = runSim(totalTime, rho * SPEED / LENGTH, 1D / LENGTH, SPEED, OBSERVER_RATE);
+            ResultSet results = runSim(totalTime, rho * SPEED / LENGTH, 1D / LENGTH, SPEED, 5*rho*SPEED/LENGTH);
             System.out.printf("Results for rho = %.2f: avg packets %.2f, idle %.4f\n", rho, results.avgPackets, results.pIdle);
+            output.printf("%.2f,%.2f,%.4f\n", rho, results.avgPackets, results.pIdle);
         }
     }
 
     //run simulator for M/M/1/K queue for each value of K (10, 25, 50)
-    static void runQ6Experiment(double totalTime) {
+    static void runQ6Experiment(double totalTime) throws FileNotFoundException{
+        PrintStream output10 = new PrintStream(new FileOutputStream(new File("q6results-10.csv")));
         System.out.println("\nK = 10");
         for(double rho = 0.5; rho <= 1.51; rho += 0.1) {
             ResultSet results = runSimK(totalTime, rho*SPEED/LENGTH, 1D / LENGTH, SPEED, 5*rho*SPEED/LENGTH, 10);
             System.out.printf("Results for rho = %.2f: avg packets %.2f, packet loss probability %.4f\n", rho, results.avgPackets, results.pLoss);
+            output10.printf("%.2f,%.2f,%.4f\n", rho, results.avgPackets, results.pLoss);
         }
+        PrintStream output25 = new PrintStream(new FileOutputStream(new File("q6results-25.csv")));
         System.out.println("\nK = 25");
         for(double rho = 0.5; rho <= 1.51; rho += 0.1) {
             ResultSet results = runSimK(totalTime, rho*SPEED/LENGTH, 1D / LENGTH, SPEED, 5*rho*SPEED/LENGTH, 25);
             System.out.printf("Results for rho = %.2f: avg packets %.2f, packet loss probability %.4f\n", rho, results.avgPackets, results.pLoss);
+            output25.printf("%.2f,%.2f,%.4f\n", rho, results.avgPackets, results.pLoss);
         }
+        PrintStream output50 = new PrintStream(new FileOutputStream(new File("q6results-50.csv")));
         System.out.println("\nK = 50");
         for(double rho = 0.5; rho <= 1.51; rho += 0.1) {
             ResultSet results = runSimK(totalTime, rho*SPEED/LENGTH, 1D / LENGTH, SPEED, 5*rho*SPEED/LENGTH, 50);
             System.out.printf("Results for rho = %.2f: avg packets %.2f, packet loss probability %.4f\n", rho, results.avgPackets, results.pLoss);
+            output50.printf("%.2f,%.2f,%.4f\n", rho, results.avgPackets, results.pLoss);
         }
     }
 
-
+    // Set flag to true to run time stability experiments
+    static final boolean STABILIZE = false;
     public static void main(String[] args) throws FileNotFoundException{
         q1();
-        runQ2Experiment(2000D);
-        runQ6Experiment(2000D);
+        if (STABILIZE){
+            for (double rho = 0.25; rho <= 0.95; rho += 0.1){
+                stabilizeT(rho);
+                stabilizeTK(rho, 10);
+                stabilizeTK(rho, 25);
+                stabilizeTK(rho, 50);
+            }
+        }
+        runQ2Experiment(8000D);
+        runQ6Experiment(8000D);
     }
 }
