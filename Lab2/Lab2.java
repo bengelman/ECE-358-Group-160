@@ -9,6 +9,7 @@ class Node {
     int collisionCounter = 0;
     double successfulTransmissions = 0;
     double attemptedTransmissions = 0;
+    int busyCounter = 0;
 
     // Generate an exponential random value with the given lambda parameter
     private double exponentialRandom(double lambda){
@@ -19,6 +20,11 @@ class Node {
     private double exponentialBackoff() {
         Random rand = new Random();
         return ((double)rand.nextInt((int)Math.pow(2, collisionCounter)))*512D/R;
+    }
+
+    private double busyExponentialBackoff() {
+        Random rand = new Random();
+        return ((double)rand.nextInt((int)Math.pow(2, busyCounter)))*512D/R;
     }
 
     public Node(int arrivalRate, double T_sim, double channelSpeed) {
@@ -55,16 +61,19 @@ class Node {
         successfulTransmissions += 1D;
         attemptedTransmissions += 1D;
         collisionCounter = 0;
+        busyCounter = 0;
         frames.remove(0);
     }
 
     // this method will change the arrival time of every frame to be >= newArrivalTime
     public void wait(double newArrivalTime) {
+        if (isDone()) {
+            return;
+        }
         for(int i = 0; i < frames.size(); i++) {
-           if(frames.get(i) > newArrivalTime) {
-               break;
-           }
-           frames.set(i, newArrivalTime);
+            if(frames.get(i) < newArrivalTime) {
+                frames.set(i, newArrivalTime);
+            }
         }
     }
 
@@ -73,12 +82,44 @@ class Node {
     public void collision(double collisionTime) {
         attemptedTransmissions += 1D;
         collisionCounter++;
+        busyCounter = 0;
         if(collisionCounter > 10) {
             collisionCounter = 0;
             frames.remove(0);
         } else {
             wait(collisionTime + exponentialBackoff());
         }
+    }
+
+    // Calculate whether any packets are scheduled to transmit when the bus is busy
+    // If so, postpone them using exponential backoff
+    public void waitNonPersistent(double newArrivalTime) {
+        if (isDone()) {
+            return;
+        }
+        // Perform exponential backoff until the next transmission time does not occur whilst the bus is busy
+        while(frames.get(0) < newArrivalTime) {
+            busyCounter++;
+            if (busyCounter > 10){
+                // Update other packets so they transmit after this packet is dropped
+                wait(frames.get(0));
+                // Drop packet
+                collisionCounter = 0;
+                busyCounter = 0;
+                frames.remove(0);
+                // Count dropped packet
+                attemptedTransmissions += 1D;
+                if (isDone()){
+                    return;
+                }
+            }
+            else {
+                // Perform exponential backoff
+                frames.set(0, frames.get(0) + busyExponentialBackoff());
+            }
+        }
+        // Update other packets so that they transmit after the packet at the front of the queue
+        wait(frames.get(0));
     }
 }
 
@@ -152,6 +193,79 @@ public class Lab2 {
         System.out.println("Efficiency = " + efficiency + ", Throughput = " + throughput);
     }
 
+    public static void runNonPersistentSim(int N, int A, double R, double L, double D, double S, double T_sim) {
+        List<Node> nodes = new ArrayList<>();
+        double T_prop = D/S;// propogation delay
+        double T_trans = L/R;// transmission delay
+        double successfulTransmissions = 0;
+        double attemptedTransmissions = 0;
+
+        // Create the N nodes
+        for(int i = 0; i < N; i++) {
+            nodes.add(new Node(A, T_sim, R));
+        }
+
+        // run the actual simulation
+        while(true) {
+            int transNode = -1;
+            double transNodeTime = T_sim;
+            boolean collisionDetected = false;
+            int furthestCollision = 0;// distance to furthest colliding node away from sender (see Piazza @213)
+
+            // find node that will start transmitting next
+            for(int i = 0; i < N; i++) {
+               if(!nodes.get(i).isDone() && nodes.get(i).nextTrans() < transNodeTime) {
+                  transNode = i;
+                  transNodeTime = nodes.get(i).nextTrans();
+               }
+            }
+
+            // exit the while loop if all frames have been sent or dropped
+            // or the end of the simulation has been reached (whichever comes first)
+            if(transNode == -1) {
+                break;
+            }
+
+            // check other nodes for collisions
+            for(int i = 0; i < N; i++) {
+                if(i != transNode && !nodes.get(i).isDone() && nodes.get(i).nextTrans() <= transNodeTime + Math.abs(transNode-i)*T_prop) {
+                    //System.out.println("COLLISION at " + i + ": " + nodes.get(i).nextTrans());
+                    collisionDetected = true;
+                    furthestCollision = Math.max(Math.abs(transNode-i), furthestCollision);
+                    nodes.get(i).collision(transNodeTime + Math.abs(transNode-i)*T_prop);// handle collision and wait
+                }
+            }
+
+            // handle collision for transmitting node
+            if(collisionDetected) {
+                nodes.get(transNode).collision(transNodeTime + furthestCollision*T_prop);// handle collision and wait
+                // update all waiting nodes, performing exponential backoff if the bus is busy during the next transmission time
+                for(int i = 0; i < N; i++) {
+                    nodes.get(i).waitNonPersistent(transNodeTime + Math.abs(transNode-i)*T_prop + furthestCollision*T_prop);
+                }
+            } else {
+                nodes.get(transNode).success();
+                // update all waiting nodes, performing exponential backoff if the bus is busy during the next transmission time
+                for(int i = 0; i < N; i++) {
+                    nodes.get(i).waitNonPersistent(transNodeTime + Math.abs(transNode-i)*T_prop + T_trans);
+                }
+            }
+        }
+
+        //int frames = 0;
+
+        // Calculate total successful and attempted transmissions
+        for(int i = 0; i < N; i++) {
+            successfulTransmissions += nodes.get(i).getSuccessfulTransmissions();
+            attemptedTransmissions += nodes.get(i).getAttemptedTransmissions();
+        }
+
+        // Print results
+        double efficiency = successfulTransmissions/attemptedTransmissions;
+        double throughput = successfulTransmissions*(L/(T_sim*1000000D));
+        System.out.println("Efficiency = " + efficiency + ", Throughput = " + throughput);
+    }
+
     // Generate results for question 1 (persistent CSMA/CD protocl) 
     // This method will call runPersistentSim for each value of N and A
     // specified in the lab manual
@@ -166,12 +280,27 @@ public class Lab2 {
         }
     }
 
+    // Generate results for question 2 (non-persistent CSMA/CD protocl) 
+    // This method will call runNonPersistentSim for each value of N and A
+    // specified in the lab manual
+    public static void question2(double R, double L, double D, double S, double T_sim) {
+        for(int N = 20; N < 101; N+=20) {
+            System.out.print("Results for non-persistent CSMA/CD protocol where N = " + N + ", A = 7: ");
+            runNonPersistentSim(N, 7, R, L, D, S, T_sim);
+            System.out.print("Results for non-persistent CSMA/CD protocol where N = " + N + ", A = 10: ");
+            runNonPersistentSim(N, 10, R, L, D, S, T_sim);
+            System.out.print("Results for non-persistent CSMA/CD protocol where N = " + N + ", A = 20: ");
+            runNonPersistentSim(N, 20, R, L, D, S, T_sim);
+        }
+    }
+
     public static void main(String[] args) {
         double R = 1000000D;// speed of LAN bus (in bits/s)
         double L = 1500D; // size of frame (in bits)
         double D = 10D; // distance between adjacent nodes (in metres)
         double S = 200000000D; // propogation speed (in m/s)
         double T_sim = 1000D; // simulation time (in seconds)
-        question1(R, L, D, S, T_sim);
+        //question1(R, L, D, S, T_sim);
+        question2(R, L, D, S, T_sim);
     }
 }
